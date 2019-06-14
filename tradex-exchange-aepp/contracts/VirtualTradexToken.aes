@@ -1,0 +1,215 @@
+contract IERC20 =
+  public function transfer : (address, int) => bool
+  public function transfer_from : (address, address, int) => bool
+  public function total_supply : () => int
+  public function balance_of : (address) => int
+  public function allowance : (address, int) => bool
+  public function approve : (address, int) => bool
+
+contract VirtualTradexToken =
+
+  record token_initial_info = { 
+    name : string, 
+    symbol : string, 
+    decimals : int }
+
+  record state = { 
+      owner : address, 
+      total_supply : int, 
+      balances : map(address, int), 
+      allowed : map(address, map(address, int)), 
+      token_initial_info : token_initial_info }
+      
+  // EVENTS
+  datatype event =
+    Transfer(indexed address, indexed address, indexed int)
+    | Burn(indexed address, indexed int)
+    | Mint(indexed address, indexed int)
+    | Approval(indexed address, indexed address, indexed int)
+
+  /*
+  * @dev - Initializing function / constructor
+  */
+  public stateful function init() = { 
+      owner = Call.caller,
+      total_supply = 10000000,
+      balances = {},
+      allowed = {},
+      token_initial_info    = { 
+          name = "Virtual TraDEX token", 
+          symbol = "VTT", 
+          decimals = 18 } }
+
+  /*
+  * @dev - Get token inital info
+  */
+  public function get_token_initial_info() : token_initial_info =
+    state.token_initial_info
+  
+  /*
+  * @dev - Get total supply of the token
+  */
+  public function get_total_supply() : int =
+    state.total_supply
+
+  /*
+  * @dev - Get the owner of the contract
+  */
+  public function get_owner() : address =
+    state.owner
+
+  /*
+  * @dev - Check the token balance of the user
+  * @param who : address - The address whose balance will be checked
+  */
+  public function balance_of(who: address) : int = 
+    lookup_by_address(who, state.balances, 0)
+
+  /*
+  * @dev - Transfer tokens from the caller to address
+  * @param to : address - The address to whom tokens will be transfered
+  * @param value : int - The tokens amount which will be transfer
+  */
+  public stateful function transfer(to: address, value: int) : bool =
+    _transfer(Call.caller, to, value)
+
+  /*
+  * @dev - Transfer tokens from the address to another address
+  * @param from : address - The address which will transfer tokens
+  * @param to : address - The address to whom tokens will be transfered
+  * @param value : int - The tokens amount which will be transfer
+  */
+  public stateful function transfer_from(from: address, to: address, value: int) : bool =
+    _transfer(from, to, value)
+
+    true
+
+  private stateful function _transfer(from: address, to: address, value: int) : bool =
+    require(value > 0, "Value is sub zero")
+    require(value =< balance_of(from), "Not enough balance")
+      
+    put(state{
+      balances[from] = sub(balance_of(from), value),
+      balances[to] = add(balance_of(to), value)})
+
+    Chain.event(Transfer(from, to, value))
+
+    true
+
+  /*
+  * @dev - Mint tokens and increase the total supply
+  * @param account : address - The address which will receive the minted tokens
+  * @param value : int - The token amount which will be minted
+  */
+  public stateful function mint(account: address, value: int) : bool =
+    require(value > 0, "Value is sub zero")
+    
+    put(state{
+      total_supply = add(state.total_supply, value),
+      balances[account] = add(balance_of(account), value)})
+
+    Chain.event(Mint(account, value))
+
+    true
+
+  /*
+  * @dev - Burn tokens and decrease the total supply
+  * @param account : address - The address from which will be burned tokens
+  * @param value : int - The token amount which will be burned
+  */
+  public stateful function burn(account: address, value: int) : bool =
+    require(value > 0, "Value is sub zero")
+
+    put(state{ 
+      total_supply = sub(state.total_supply, value),
+      balances[account] = sub(balance_of(account), value)})
+
+    Chain.event(Burn(account, value))
+
+    true
+  
+  /*
+  * @dev - Returns the remaining number of tokens that spender will be allowed to spend on behalf of owner through transfer_from
+  * @param owner : address - The owner who allowed the amount of tokens which the spender can transfer 
+  * @param spender : address - The spender whose allowance will be checked
+  */
+  public stateful function allowance(owner : address, spender : address) : int = 
+    state.allowed[owner][spender]
+
+  /*
+  * @dev - Increases the allowance granted to spender by the caller.
+  * @param spender : address - The address whose allowance will be increased
+  * @param added_value : int - The added value to the given address
+  */
+  public stateful function increase_allowance(spender : address, added_value : int) : bool = 
+    put(state{ 
+      allowed[Call.caller][spender] = add(allowance(Call.caller, spender), added_value)})
+    
+    approve(Call.caller, spender, allowance(Call.caller, spender))
+
+    true
+
+  /*
+  * @dev - Decreases the allowance granted to spender by the caller
+  * @param spender : address - The address whose allowance will be decreases
+  * @param subtracted_value : int - The substracted value to the given address
+  */
+  public stateful function decrease_allowance(spender : address, subtracted_value : int) : bool = 
+    put(state{ 
+      allowed[Call.caller][spender] = add(allowance(Call.caller, spender), subtracted_value)})
+    
+    approve(Call.caller, spender, allowance(Call.caller, spender))
+
+    true
+
+  /*
+  * @dev - Sets amount as the allowance of spender over the caller's tokens
+  * @param owner : address - The address which wil give tokens amount to spend 
+  * @param spender : address - The address which will get tokens amount to spend
+  * @param value : int - The amount of tokens which will be allowed to be spent
+  */
+  public stateful function approve(owner : address, spender : address, value : int) : bool = 
+    //require(owner != #0, "ERC20: approve from the zero address")
+    //require(spender != #0, "ERC20: approve to the zero address")
+
+    put(state{ allowed[owner][spender] = value})
+    
+    Chain.event(Approval(owner, spender, value))
+
+    true
+
+  /*
+  * @dev - Internal helper function for reverting execution if condtion not met
+  * @param expression : bool - The condition
+  * @param error : string - The error message to be provided
+  */
+  private function require(expression : bool, error : string) =
+    if(!expression)
+      abort(error)
+
+  private function lookup_by_address(k : address, m, v) =
+  	switch(Map.lookup(k, m))
+	    None    => v
+	    Some(x) => x
+
+  // SAFE MATH
+  private function add(_a : int, _b : int) : int =
+    let c : int = _a + _b
+    require(c >= _a, "Error")
+    c 
+
+  private function sub(_a : int, _b : int) : int =
+    require(_b =< _a, "Error")
+    _a - _b
+
+  private function div(_a : int, _b : int) : int =
+    require(_b > 0, "Error")
+    _a / _b
+
+  private function mul(_a : int, _b : int) : int =
+    if(_a == 0)
+      0
+    else  
+      let c : int = _a * _b
+      require(c / _a == _b, "Error")
+      c

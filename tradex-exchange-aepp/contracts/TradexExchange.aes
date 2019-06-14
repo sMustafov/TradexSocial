@@ -1,0 +1,205 @@
+contract IERC20 =
+  public function transfer : (address, int) => bool
+  public function transfer_from : (address, address, int) => bool
+  public function total_supply : () => int
+  public function balance_of : (address) => int
+  public function allowance : (address, int) => bool
+  public function approve : (address, int) => bool
+
+contract TradexTradex =
+  record state = {
+    owner : address,
+    exchange_rate_for_ae : int,
+    exchange_rate_for_token : map(IERC20, int),
+    balances : map(address, int)}
+  
+  /*
+  * @dev - Initializing function / constructor
+  * @param _exchange_rate_for_ae : int - The intial exchange rate for AE
+  * @param _exchange_rate_for_token : int - The intial exchange rate for tokens
+  */
+  public stateful function init(_exchange_rate_for_ae : int) = {
+    owner = Call.caller,
+    exchange_rate_for_ae = _exchange_rate_for_ae,
+    exchange_rate_for_token = {},
+    balances = {}}
+
+  // EVENTS
+  datatype event = 
+    LogTokensAmountSwap(indexed int, indexed int, indexed int) 
+    | LogTokensAddressSwap(indexed address, indexed address) 
+    | LogLiquidityAdd(indexed address, indexed int) 
+    | LogLiquidityGet(indexed address, indexed int)
+
+  /*
+  * @dev - Function to check the contract balance for user address
+  * @param who : int - Тhe address of the user
+  */    
+  public function balance_of(who: address) : int = 
+    lookup_by_address(who, state.balances, 0)
+
+  /*
+  * @dev - Function for updating the exchange rate of АЕ, only the owner of the contract can do the operation
+  * @param _exchange_rate_for_ae : int - Тhe exchange rate of AE with which the owner will update the rate
+  */
+  public stateful function update_exchange_rate_for_ae(_exchange_rate_for_ae : int) = 
+    only_owner()
+    put(state { exchange_rate_for_ae = _exchange_rate_for_ae })
+
+  /*
+  * @dev - Function to check the current exchange rate of AE tokens
+  */  
+  public function get_exchange_rate_for_ae() : int =
+    state.exchange_rate_for_ae
+
+  /*
+  * @dev - Function for updating the exchange rate of given token, only the owner of the contract can do the operation
+  * @param _exchange_rate_for_token : int - The exchange rate of tokens with which the owner will update the rate
+  * @param token_address : address - The address of token whose rate will be updated
+  */
+  public stateful function update_exchange_rate_for_token(token_address : IERC20, _exchange_rate_for_token : int) = 
+    only_owner()
+    put(state { exchange_rate_for_token[token_address] = _exchange_rate_for_token })
+
+  /*
+  * @dev - Function to check the current exchange rate of given token
+  * @param token_address : address - The address of token whose rate will be checked
+  */  
+  public function get_exchange_rate_for_token(token_address : IERC20) : int =
+    state.exchange_rate_for_token[token_address]
+
+  /*
+  * @dev - Function to check the balance of AE tokens for given address
+  * @param who : int - The address of the user
+  */   
+  public function get_balance(who : address) : int = 
+    Chain.balance(who)
+
+  /*
+  * @dev - Function to check the balance of given token for user address
+  * @param who : int - The address of the user
+  * @param token : int - The token address
+  */     
+  public function get_token_balance(who : address, token : IERC20) : int =
+    token.balance_of(who)
+
+  /*
+  * @dev - Function to add AE tokens from the pool wallet (the address which calls the function) to the contract to provide liquidity
+  */  
+  public stateful function add_liquidity() = 
+    let liquidity_provider : address = Call.caller
+
+    let amount = Call.value
+    
+    require(amount > 0, "INVALID_POOL_WALLET_AMOUNT")
+
+    put(state{ balances[liquidity_provider] = add(balance_of(liquidity_provider), amount) })
+    
+    Chain.event(LogLiquidityAdd(liquidity_provider, amount))
+
+  /*
+  * @dev - Function to get back the AE tokens from the contact to pool wallet (the address which calls the function)
+  */
+  public stateful function get_liquidity() =
+    let liquidity_provider : address = Call.caller
+
+    let ae = state.balances[liquidity_provider]
+      
+    require(ae > 0, "INVALID_LIQUIDITY_PROVIDER")
+
+    Chain.spend(liquidity_provider, ae)
+    
+    Chain.event(LogLiquidityGet(liquidity_provider, ae))
+
+  /*
+  * @dev - Function to swap tokens for AE 
+  * @param tokens_in_amount : int - The amount of tokens which the user want to swap
+  * @param pool_wallet : address - The address where the tokens should go - liquidity_provider
+  * @param token_in_address : IERC20 - The address of the token which the user is going to swap
+  */
+  public stateful function swap_for_ae(
+    tokens_in_amount : int,
+    pool_wallet : address,
+    token_in_address : IERC20) =
+
+    let user_wallet : address = Call.caller 
+
+    require(token_in_address.balance_of(user_wallet) > tokens_in_amount, "INVALID_USER_WALLET_AMOUNT")
+    
+    token_in_address.transfer_from(user_wallet, pool_wallet, tokens_in_amount)
+
+    let ae_out : int = div(tokens_in_amount, get_exchange_rate_for_ae())
+    
+    Chain.spend(user_wallet, ae_out)
+
+    Chain.event(LogTokensAmountSwap(balance_of(pool_wallet), tokens_in_amount, get_exchange_rate_for_ae()))
+    Chain.event(LogTokensAddressSwap(user_wallet, pool_wallet))
+
+  /*
+  * @dev - Function to swap tokens for tokens 
+  * @param tokens_in_amount : int - The amount of tokens which the user want to swap
+  * @param pool_wallet : address - The address where the tokens should go - liquidity_provider
+  * @param token_in_address : IERC20 - The address of the token which the user is going to swap
+  * @param token_out_address : IERC20 - The address of the token which the user is going to receive
+  */
+  public stateful function swap_for_tokens(
+    tokens_in_amount : int,
+    pool_wallet : address,
+    token_in_address : IERC20,
+    token_out_address : IERC20)  = 
+    
+    let user_wallet : address = Call.caller
+
+    require(token_in_address.transfer_from(user_wallet, pool_wallet, tokens_in_amount), "TOKEN_TRANSFER_FAIL")
+
+    require(get_exchange_rate_for_token(token_out_address) > 0, "NO_RATE_FOR_TOKEN")
+    
+    let tokens_out : int = div(tokens_in_amount, get_exchange_rate_for_token(token_out_address))
+
+    require(token_out_address.transfer_from(pool_wallet, user_wallet, tokens_out), "TOKEN_TRANSFER_FAIL")
+  
+    Chain.event(LogTokensAmountSwap(balance_of(pool_wallet), tokens_out, get_exchange_rate_for_token(token_out_address)))
+    Chain.event(LogTokensAddressSwap(user_wallet, pool_wallet))
+
+  /*
+  * @dev - Internal helper function for reverting execution if condtion not met
+  * @param expression : bool - The condition
+  * @param error : string - The error message to be provided
+  */
+  private function require(expression : bool, error : string) =
+    if(!expression)
+      abort(error)
+    
+  /*
+  * @dev - Internal helper function used as modifier for checking if the caller is the owner
+  */
+  private function only_owner() =
+    require(Call.caller == state.owner, "Only the owner is allowed!")
+
+  private function lookup_by_address(k : address, m, v) =
+  	switch(Map.lookup(k, m))
+	    None    => v
+	    Some(x) => x
+  
+  // SAFE MATH
+  private function add(_a : int, _b : int) : int =
+    let c : int = _a + _b
+    require(c >= _a, "Error")
+    c 
+
+  private function sub(_a : int, _b : int) : int =
+    require(_b =< _a, "Error")
+    _a - _b
+
+  private function div(_a : int, _b : int) : int =
+    require(_b > 0, "Error")
+    _a / _b
+
+  private function mul(_a : int, _b : int) : int =
+    if(_a == 0)
+      0
+    else  
+      let c : int = _a * _b
+      require(c / _a == _b, "Error")
+      c
+    
